@@ -122,6 +122,22 @@ tr.mine .grab{opacity:1}
 .slot-name{font-weight:600}
 .slot-meta{color:var(--muted);font:400 11px "IBM Plex Mono",monospace;margin-left:auto}
 .slot.empty .slot-name{color:var(--muted);font-weight:400}
+.gridwrap{overflow-x:auto;padding:0 24px 60px}
+#grid{border-collapse:separate;border-spacing:3px;min-width:960px;width:100%}
+#grid th{font:600 12.5px "Barlow Condensed",sans-serif;letter-spacing:.8px;
+  text-transform:uppercase;color:var(--muted);padding:6px 2px 4px;text-align:center}
+#grid th.gr-me{color:var(--accent)}
+#grid td{border-radius:6px;padding:4px 6px;height:36px;vertical-align:middle;
+  font:600 11px "IBM Plex Sans",sans-serif;line-height:1.25}
+#grid td.gr-rnd{background:none;color:var(--muted);white-space:nowrap;
+  font:600 11.5px "Barlow Condensed",sans-serif;letter-spacing:.6px;padding-right:8px}
+#grid td.gr-empty{background:var(--chip);color:var(--muted);text-align:center;
+  font:500 10px "IBM Plex Mono",monospace}
+#grid td.gr-cell{color:var(--cell-ink)}
+#grid td.gr-cell.gr-mine{outline:2px solid var(--accent);outline-offset:-1px}
+.gr-rb{background:var(--rb)}.gr-wr{background:var(--wr)}.gr-te{background:var(--te)}
+.gr-qb{background:var(--qb)}.gr-ut{background:var(--ut)}
+.gr-meta{font:400 9px "IBM Plex Mono",monospace;opacity:.85}
 tr.drafted td{background:transparent}
 tr.drafted .nm,tr.drafted .num,tr.drafted .tm,tr.drafted .rk{
   color:var(--drafted);text-decoration:line-through}
@@ -154,7 +170,8 @@ tr.drafted .ico{filter:grayscale(1);opacity:.4}
     <button class="chip" data-pos="DST" aria-pressed="false">DST</button>
   </div>
   <button class="chip" id="hideDrafted" aria-pressed="false">Hide drafted</button>
-  <button class="chip" id="autoSim" aria-pressed="true" title="After each of your picks, cross off the players who'd go before your next snake turn (by ADP)">🤖 Auto-sim to my next pick</button>
+  <button class="chip" id="autoSim" aria-pressed="true" title="Simulate the other 9 teams' picks by ADP up to your next snake turn; re-flows whenever you change a pick">🤖 Auto-sim others</button>
+  <button class="chip" id="viewBtn" aria-pressed="false">🧱 Board view</button>
   <button class="chip" id="reset" title="Un-cross everyone">Reset picks</button>
   <button class="chip" id="themeBtn" aria-label="Toggle dark mode">🌙 Dark</button>
   <button class="chip" id="teamBtn" aria-pressed="false">🌮 My team (0)</button>
@@ -447,11 +464,12 @@ tr.drafted .ico{filter:grayscale(1);opacity:.4}
 </tbody>
 </table>
 </div>
+<div class="gridwrap" id="gridWrap" hidden><table id="grid" aria-label="Draft board grid"></table></div>
 <aside id="teamPanel" hidden aria-label="My team"></aside>
 <script>
 (function(){
   var KEY="tacoBoard2026.drafted",MKEY="tacoBoard2026.mine",SKEY="tacoBoard2026.autosim";
-  var MYPICKS=[4, 17, 24, 37, 44, 57, 64, 77, 84, 97, 104, 117, 124, 137, 144];
+  var MYPICKS=[4, 17, 24, 37, 44, 57, 64, 77, 84, 97, 104, 117, 124, 137, 144],SLOTS=["Commish", "Purdy", "Rebuild", "TACO", "Nico", "Ms.Jackson", "EDC", "GRS", "Fiko", "BigBlue"],NROUNDS=15,NTEAMS=SLOTS.length;
   var drafted={},mine={},autoSim=true;
   try{autoSim=localStorage.getItem(SKEY)!=="off";}catch(e){}
   try{drafted=JSON.parse(localStorage.getItem(KEY)||"{}")||{};}catch(e){drafted={};}
@@ -494,10 +512,55 @@ tr.drafted .ico{filter:grayscale(1);opacity:.4}
     });
     panel.innerHTML=h;
   }
+  // Replay the whole draft from scratch: my picks land at MYPICKS slots, every
+  // other pick up to my next turn goes to the best remaining ADP. Derived (not
+  // stored), so un-picking or picking out of order just re-flows the board.
+  function buildSim(){
+    var myList=Object.keys(mine).sort(function(a,b){return mine[a]-mine[b];});
+    var n=myList.length,total=NROUNDS*NTEAMS;
+    var upTo=autoSim?(n<MYPICKS.length?MYPICKS[n]-1:total):0;
+    var pool=[];
+    rows.forEach(function(r){var k=r.dataset.rank;if(!mine[k]&&!drafted[k])pool.push(k);});
+    var gi=0,grid=new Array(total),gone={};
+    for(var p=1;p<=total;p++){
+      var mi=MYPICKS.indexOf(p);
+      if(mi>-1)grid[p-1]={rank:mi<n?myList[mi]:null,mine:true};
+      else if(p<=upTo){var k2=pool[gi++]||null;grid[p-1]={rank:k2,mine:false};if(k2)gone[k2]=1;}
+      else grid[p-1]={rank:null,mine:false};
+    }
+    return {gone:gone,grid:grid};
+  }
+  function cellLabel(k){
+    var p=playerOf(byRank[k]);
+    if(p.pos==="DST")return p.team+" DST";
+    var parts=p.name.replace(/ (Jr\.|Sr\.|III|II)$/,"").split(" ");
+    return parts.length>1?parts[0].charAt(0)+". "+parts.slice(1).join(" "):parts[0];
+  }
+  function renderGrid(sim){
+    var posTok={RB:"rb",WR:"wr",TE:"te",QB:"qb",K:"ut",DST:"ut"};
+    var h='<thead><tr><th></th>';
+    SLOTS.forEach(function(s,i){h+='<th class="'+(i+1===4?"gr-me":"")+'">'+s+"</th>";});
+    h+="</tr></thead><tbody>";
+    for(var r=1;r<=NROUNDS;r++){
+      h+='<tr><td class="gr-rnd">R'+r+(r%2?" →":" ←")+"</td>";
+      for(var s=1;s<=NTEAMS;s++){
+        var p=(r-1)*NTEAMS+(r%2?s:NTEAMS+1-s);
+        var cell=sim.grid[p-1];
+        if(cell&&cell.rank){
+          var pl=playerOf(byRank[cell.rank]);
+          h+='<td class="gr-cell gr-'+(posTok[pl.pos]||"ut")+(cell.mine?" gr-mine":"")+'">'+
+             cellLabel(cell.rank)+' <span class="gr-meta">'+pl.pos+"</span></td>";
+        }else h+='<td class="gr-empty">'+p+"</td>";
+      }
+      h+="</tr>";
+    }
+    document.getElementById("grid").innerHTML=h+"</tbody>";
+  }
   function apply(){
+    var sim=buildSim();
     var term=q.value.trim().toLowerCase(),shown=0;
     rows.forEach(function(r){
-      var k=r.dataset.rank,m=!!mine[k],d=!m&&!!drafted[k];
+      var k=r.dataset.rank,m=!!mine[k],d=!m&&(!!drafted[k]||!!sim.gone[k]);
       r.classList.toggle("drafted",d);
       r.classList.toggle("mine",m);
       var ok=(!pos||r.dataset.pos===pos)&&
@@ -509,6 +572,7 @@ tr.drafted .ico{filter:grayscale(1);opacity:.4}
     rnds.forEach(function(r){r.style.display=(pos||term)?"none":"";});
     count.textContent=shown+" / "+rows.length+" shown";
     renderTeam();
+    if(!document.getElementById("gridWrap").hidden)renderGrid(sim);
   }
   rows.forEach(function(r){
     r.addEventListener("click",function(e){
@@ -519,7 +583,6 @@ tr.drafted .ico{filter:grayscale(1);opacity:.4}
           ks.forEach(function(kk,i){mine[kk]=i+1;});
         }else{
           mine[k]=Object.keys(mine).length+1;delete drafted[k];
-          if(autoSim)simToNext();
         }
         save();apply();return;
       }
@@ -532,22 +595,21 @@ tr.drafted .ico{filter:grayscale(1);opacity:.4}
     panel.hidden=!panel.hidden;
     this.setAttribute("aria-pressed",panel.hidden?"false":"true");
   });
-  function simToNext(){
-    var n=Object.keys(mine).length;      // picks I've made; next turn = MYPICKS[n]
-    if(n>=MYPICKS.length)return;
-    var next=MYPICKS[n];
-    var taken=Object.keys(drafted).length+n;
-    for(var i=0;i<rows.length&&taken<next-1;i++){
-      var k=rows[i].dataset.rank;
-      if(!drafted[k]&&!mine[k]){drafted[k]=1;taken++;}
-    }
-  }
   var simBtn=document.getElementById("autoSim");
   simBtn.setAttribute("aria-pressed",autoSim?"true":"false");
   simBtn.addEventListener("click",function(){
     autoSim=!autoSim;
     this.setAttribute("aria-pressed",autoSim?"true":"false");
     try{localStorage.setItem(SKEY,autoSim?"on":"off");}catch(e){}
+    apply();
+  });
+  var viewBtn=document.getElementById("viewBtn"),gridWrap=document.getElementById("gridWrap");
+  var listWrap=document.querySelector(".tblwrap");
+  viewBtn.addEventListener("click",function(){
+    gridWrap.hidden=!gridWrap.hidden;
+    listWrap.style.display=gridWrap.hidden?"":"none";
+    this.setAttribute("aria-pressed",gridWrap.hidden?"false":"true");
+    apply();
   });
   document.getElementById("posChips").addEventListener("click",function(e){
     var b=e.target.closest(".chip");if(!b)return;
