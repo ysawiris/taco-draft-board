@@ -122,6 +122,27 @@ tr.mine .grab{opacity:1}
 .slot-name{font-weight:600}
 .slot-meta{color:var(--muted);font:400 11px "IBM Plex Mono",monospace;margin-left:auto}
 .slot.empty .slot-name{color:var(--muted);font-weight:400}
+#mockPanel{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);
+  width:min(94vw,760px);max-height:76vh;overflow:auto;background:var(--surface);
+  border:1px solid var(--line);border-radius:12px;
+  box-shadow:0 10px 32px rgba(0,0,0,.28);z-index:21;padding:14px 16px}
+#mockPanel h2{font:700 20px "Barlow Condensed",sans-serif;letter-spacing:.8px;
+  text-transform:uppercase;margin:0 0 10px}
+#mockPanel h2 em{color:var(--accent);font-style:normal}
+.mk-scroll{overflow-x:auto}
+.mk-table{border-collapse:separate;border-spacing:3px}
+.mk-table th{font:600 12px "Barlow Condensed",sans-serif;letter-spacing:.6px;
+  color:var(--ink);text-align:left;padding:2px 6px;min-width:118px;vertical-align:top}
+.mk-table th.mk-rd,.mk-table td.mk-rd{min-width:0;color:var(--muted);
+  font:600 11px "Barlow Condensed",sans-serif;white-space:nowrap;padding-right:6px}
+.mk-when{display:block;font:400 9.5px "IBM Plex Mono",monospace;color:var(--muted)}
+.mk-act{background:none;border:none;cursor:pointer;font-size:11px;padding:1px 3px;
+  color:var(--accent)}
+.mk-act:hover{text-decoration:underline}
+.mk-cell{color:var(--cell-ink);border-radius:4px;padding:3px 6px;
+  font:600 10.5px "IBM Plex Sans",sans-serif;white-space:nowrap}
+.mk-none{color:var(--muted);text-align:center}
+.mk-empty-msg{color:var(--muted);font-size:13px;margin:4px 0 6px}
 .gridwrap{overflow-x:auto;padding:0 24px 60px}
 #grid{border-collapse:separate;border-spacing:3px;min-width:960px;width:100%}
 #grid th{font:600 12.5px "Barlow Condensed",sans-serif;letter-spacing:.8px;
@@ -175,6 +196,8 @@ tr.drafted .ico{filter:grayscale(1);opacity:.4}
   <button class="chip" id="reset" title="Un-cross everyone">Reset picks</button>
   <button class="chip" id="themeBtn" aria-label="Toggle dark mode">🌙 Dark</button>
   <button class="chip" id="teamBtn" aria-pressed="false">🌮 My team (0)</button>
+  <button class="chip" id="saveMock" title="Snapshot your current picks as a saved mock">💾 Save mock</button>
+  <button class="chip" id="mocksBtn" aria-pressed="false">📂 Mocks (0)</button>
   <span class="count" id="count"></span>
 </div>
 <div class="legend">
@@ -466,12 +489,17 @@ tr.drafted .ico{filter:grayscale(1);opacity:.4}
 </div>
 <div class="gridwrap" id="gridWrap" hidden><table id="grid" aria-label="Draft board grid"></table></div>
 <aside id="teamPanel" hidden aria-label="My team"></aside>
+<aside id="mockPanel" hidden aria-label="Saved mock drafts"></aside>
 <script>
 (function(){
   var KEY="tacoBoard2026.drafted",MKEY="tacoBoard2026.mine",SKEY="tacoBoard2026.autosim";
   var MYPICKS=[4, 17, 24, 37, 44, 57, 64, 77, 84, 97, 104, 117, 124, 137, 144],SLOTS=["Commish", "Purdy", "Rebuild", "TACO", "Nico", "Ms.Jackson", "EDC", "GRS", "Fiko", "BigBlue"],NROUNDS=15,NTEAMS=SLOTS.length;
-  var drafted={},mine={},autoSim=true;
+  var MOKEY="tacoBoard2026.mocks",QKEY="tacoBoard2026.mockseq";
+  var drafted={},mine={},autoSim=true,mocks=[],mockSeq=1;
   try{autoSim=localStorage.getItem(SKEY)!=="off";}catch(e){}
+  try{mocks=JSON.parse(localStorage.getItem(MOKEY)||"[]")||[];}catch(e){mocks=[];}
+  try{mockSeq=parseInt(localStorage.getItem(QKEY)||"1",10)||1;}catch(e){}
+  var POSTOK={RB:"rb",WR:"wr",TE:"te",QB:"qb",K:"ut",DST:"ut"};
   try{drafted=JSON.parse(localStorage.getItem(KEY)||"{}")||{};}catch(e){drafted={};}
   try{mine=JSON.parse(localStorage.getItem(MKEY)||"{}")||{};}catch(e){mine={};}
   var rows=[].slice.call(document.querySelectorAll("tr[data-rank]"));
@@ -480,6 +508,7 @@ tr.drafted .ico{filter:grayscale(1);opacity:.4}
   var pos="",hide=false;
   var q=document.getElementById("q"),count=document.getElementById("count");
   var panel=document.getElementById("teamPanel"),teamBtn=document.getElementById("teamBtn");
+  var mockPanel=document.getElementById("mockPanel"),mocksBtn=document.getElementById("mocksBtn");
 
   function save(){try{
     localStorage.setItem(KEY,JSON.stringify(drafted));
@@ -537,7 +566,7 @@ tr.drafted .ico{filter:grayscale(1);opacity:.4}
     return parts.length>1?parts[0].charAt(0)+". "+parts.slice(1).join(" "):parts[0];
   }
   function renderGrid(sim){
-    var posTok={RB:"rb",WR:"wr",TE:"te",QB:"qb",K:"ut",DST:"ut"};
+    var posTok=POSTOK;
     var h='<thead><tr><th></th>';
     SLOTS.forEach(function(s,i){h+='<th class="'+(i+1===4?"gr-me":"")+'">'+s+"</th>";});
     h+="</tr></thead><tbody>";
@@ -573,6 +602,42 @@ tr.drafted .ico{filter:grayscale(1);opacity:.4}
     count.textContent=shown+" / "+rows.length+" shown";
     renderTeam();
     if(!document.getElementById("gridWrap").hidden)renderGrid(sim);
+    renderMocks();
+  }
+  function myPickList(){
+    return Object.keys(mine).sort(function(a,b){return mine[a]-mine[b];});
+  }
+  function mockCell(k){
+    if(!k||!byRank[k])return '<td class="mk-none">—</td>';
+    var p=playerOf(byRank[k]);
+    return '<td><span class="mk-cell gr-'+(POSTOK[p.pos]||"ut")+'">'+
+           cellLabel(k)+"</span></td>";
+  }
+  function renderMocks(){
+    mocksBtn.textContent="📂 Mocks ("+mocks.length+")";
+    if(mockPanel.hidden)return;
+    var cur=myPickList();
+    var cols=[];
+    if(cur.length)cols.push({n:"Current",t:"",picks:cur,live:true});
+    mocks.forEach(function(m,i){cols.push({n:m.n,t:m.t,picks:m.picks,i:i});});
+    var h="<h2>Mock <em>drafts</em></h2>";
+    if(!cols.length){
+      mockPanel.innerHTML=h+'<p class="mk-empty-msg">No mocks yet — make picks with the 🌮 buttons, then hit 💾 Save mock.</p>';
+      return;
+    }
+    h+='<div class="mk-scroll"><table class="mk-table"><thead><tr><th class="mk-rd"></th>';
+    cols.forEach(function(c){
+      h+="<th>"+c.n+(c.live?"":' <button class="mk-act" data-load="'+c.i+'">↺ load</button>'+
+         '<button class="mk-act" data-del="'+c.i+'" aria-label="Delete '+c.n+'">✕</button>')+
+         '<span class="mk-when">'+(c.t||"in progress")+"</span></th>";
+    });
+    h+="</tr></thead><tbody>";
+    for(var r=0;r<NROUNDS;r++){
+      h+='<tr><td class="mk-rd">R'+(r+1)+" · "+MYPICKS[r]+"</td>";
+      cols.forEach(function(c){h+=mockCell(c.picks[r]);});
+      h+="</tr>";
+    }
+    mockPanel.innerHTML=h+"</tbody></table></div>";
   }
   rows.forEach(function(r){
     r.addEventListener("click",function(e){
@@ -611,6 +676,41 @@ tr.drafted .ico{filter:grayscale(1);opacity:.4}
     this.setAttribute("aria-pressed",gridWrap.hidden?"false":"true");
     apply();
   });
+  function saveMocks(){try{
+    localStorage.setItem(MOKEY,JSON.stringify(mocks));
+    localStorage.setItem(QKEY,String(mockSeq));
+  }catch(e){}}
+  var saveBtn=document.getElementById("saveMock"),saveFlash;
+  saveBtn.addEventListener("click",function(){
+    var cur=myPickList();
+    if(!cur.length){this.textContent="💾 Nothing to save";}
+    else{
+      var when="";
+      try{when=new Date().toLocaleString([],{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"});}catch(e){}
+      mocks.unshift({n:"Mock "+mockSeq++,t:when,picks:cur});
+      if(mocks.length>12)mocks.length=12;
+      saveMocks();
+      this.textContent="💾 Saved ✓";
+      renderMocks();
+    }
+    clearTimeout(saveFlash);
+    saveFlash=setTimeout(function(){saveBtn.textContent="💾 Save mock";},1800);
+  });
+  mocksBtn.addEventListener("click",function(){
+    mockPanel.hidden=!mockPanel.hidden;
+    this.setAttribute("aria-pressed",mockPanel.hidden?"false":"true");
+    renderMocks();
+  });
+  mockPanel.addEventListener("click",function(e){
+    var b=e.target.closest(".mk-act");if(!b)return;
+    if(b.dataset.del!==undefined){
+      mocks.splice(+b.dataset.del,1);saveMocks();renderMocks();
+    }else if(b.dataset.load!==undefined){
+      var m=mocks[+b.dataset.load];if(!m)return;
+      mine={};m.picks.forEach(function(k,i){mine[k]=i+1;});
+      drafted={};save();apply();
+    }
+  });
   document.getElementById("posChips").addEventListener("click",function(e){
     var b=e.target.closest(".chip");if(!b)return;
     pos=b.dataset.pos;
@@ -622,9 +722,19 @@ tr.drafted .ico{filter:grayscale(1);opacity:.4}
   document.getElementById("hideDrafted").addEventListener("click",function(){
     hide=!hide;this.setAttribute("aria-pressed",hide?"true":"false");apply();
   });
-  document.getElementById("reset").addEventListener("click",function(){
-    if(!confirm("Clear all crossed-off picks AND your team?"))return;
-    drafted={};mine={};save();apply();
+  var resetBtn=document.getElementById("reset"),resetTimer;
+  resetBtn.addEventListener("click",function(){
+    if(resetBtn.dataset.armed){
+      delete resetBtn.dataset.armed;clearTimeout(resetTimer);
+      resetBtn.textContent="Reset picks";
+      drafted={};mine={};save();apply();
+      return;
+    }
+    resetBtn.dataset.armed="1";
+    resetBtn.textContent="Click again to reset";
+    resetTimer=setTimeout(function(){
+      delete resetBtn.dataset.armed;resetBtn.textContent="Reset picks";
+    },3500);
   });
   q.addEventListener("input",apply);
   apply();
